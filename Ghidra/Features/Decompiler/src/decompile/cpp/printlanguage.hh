@@ -486,8 +486,8 @@ public:
   virtual void opIntSlessEqual(const PcodeOp *op)=0;			///< Emit a INT_SLESSEQUAL operator
   virtual void opIntLess(const PcodeOp *op)=0;				///< Emit a INT_LESS operator
   virtual void opIntLessEqual(const PcodeOp *op)=0;			///< Emit a INT_LESSEQUAL operator
-  virtual void opIntZext(const PcodeOp *op)=0;				///< Emit a INT_ZEXT operator
-  virtual void opIntSext(const PcodeOp *op)=0;				///< Emit a INT_SEXT operator
+  virtual void opIntZext(const PcodeOp *op,const PcodeOp *readOp)=0;	///< Emit a INT_ZEXT operator
+  virtual void opIntSext(const PcodeOp *op,const PcodeOp *readOp)=0;	///< Emit a INT_SEXT operator
   virtual void opIntAdd(const PcodeOp *op)=0;				///< Emit a INT_ADD operator
   virtual void opIntSub(const PcodeOp *op)=0;				///< Emit a INT_SUB operator
   virtual void opIntCarry(const PcodeOp *op)=0;				///< Emit a INT_CARRY operator
@@ -538,6 +538,9 @@ public:
   virtual void opSegmentOp(const PcodeOp *op)=0;			///< Emit a SEGMENTOP operator
   virtual void opCpoolRefOp(const PcodeOp *op)=0;			///< Emit a CPOOLREF operator
   virtual void opNewOp(const PcodeOp *op)=0;				///< Emit a NEW operator
+  virtual void opInsertOp(const PcodeOp *op)=0;				///< Emit an INSERT operator
+  virtual void opExtractOp(const PcodeOp *op)=0;			///< Emit an EXTRACT operator
+  virtual void opPopcountOp(const PcodeOp *op)=0;			///< Emit a POPCOUNT operator
 
   static int4 mostNaturalBase(uintb val); 			///< Determine the most natural base for an integer
   static void formatBinary(ostream &s,uintb val);		///< Print a number in binary form

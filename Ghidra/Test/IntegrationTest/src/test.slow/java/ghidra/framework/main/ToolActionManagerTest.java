@@ -35,10 +35,10 @@ import docking.widgets.OptionDialog;
 import docking.widgets.filechooser.GhidraFileChooser;
 import docking.widgets.table.GTable;
 import docking.widgets.tree.GTreeNode;
-import docking.widgets.tree.GTreeRootNode;
 import docking.wizard.WizardManager;
 import ghidra.app.plugin.core.codebrowser.CodeBrowserPlugin;
 import ghidra.framework.GenericRunInfo;
+import ghidra.framework.ToolUtils;
 import ghidra.framework.data.ContentHandler;
 import ghidra.framework.main.datatree.DataTree;
 import ghidra.framework.model.*;
@@ -60,6 +60,7 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 
 	private FrontEndTool frontEndTool;
 	private TestEnv env;
+	private File exportFile = new File(GenericRunInfo.getProjectsDirPath(), "untitled.tool");
 
 	@Before
 	public void setUp() throws Exception {
@@ -68,6 +69,8 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 
 		frontEndTool = env.getFrontEndTool();
 		env.showFrontEndTool();
+
+		exportFile.delete();
 	}
 
 	@After
@@ -122,7 +125,7 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 		DockingActionIf closeAction = getAction("Close Tool");
 		performToolButtonAction(closeAction, "Untitled", true, true);
 
-		Tool[] tools = frontEndTool.getProject().getToolServices().getRunningTools();
+		PluginTool[] tools = frontEndTool.getProject().getToolServices().getRunningTools();
 		assertEquals(0, tools.length);
 	}
 
@@ -133,7 +136,7 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 
 		DockingActionIf runAction = getAction("Untitled", "Run Tool");
 		performAction(runAction, "Untitled", true);
-		Tool[] tools = frontEndTool.getProject().getToolServices().getRunningTools();
+		PluginTool[] tools = frontEndTool.getProject().getToolServices().getRunningTools();
 		assertEquals(2, tools.length);
 	}
 
@@ -157,7 +160,7 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 		assertNotNull(window);
 
 		waitForCondition(() -> {
-			Tool[] tools = frontEndTool.getToolServices().getRunningTools();
+			PluginTool[] tools = frontEndTool.getToolServices().getRunningTools();
 			return tools.length == 2;
 		});
 
@@ -172,21 +175,16 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 		int count = tc.getToolCount();
 
 		String toolNamePrefix = "TestCodeBrowser";
-		final File cbFile =
-			ResourceManager.getResourceFile("defaultTools/" + toolNamePrefix + ".tool");
+		final File cbFile = ResourceManager.getResourceFile(
+			"defaultTools/" + toolNamePrefix + ToolUtils.TOOL_EXTENSION);
 		assertNotNull(cbFile);
 
 		DockingActionIf importAction = getAction("Import Tool");
 		performAction(importAction, false);
 
-		waitForSwing();
-		JDialog d = waitForJDialog("Import Tool");
-		assertNotNull(d);
-		final GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
+		GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
 
-		assertNotNull(chooser);
-		SwingUtilities.invokeAndWait(() -> chooser.setSelectedFile(cbFile));
-		waitForUpdateOnChooser(chooser);
+		setSelectedFile(chooser, cbFile);
 
 		pressButtonByText(chooser, "Import");
 		waitForSwing();
@@ -201,13 +199,7 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 		}
 		assertTrue(list.size() > 0);
 		Collections.sort(list);
-		SwingUtilities.invokeAndWait(() -> tc.remove(list.get(list.size() - 1)));
-	}
-
-	private Program buildProgram(String programName) throws Exception {
-		ProgramBuilder builder = new ProgramBuilder(programName, ProgramBuilder._TOY);
-		builder.createMemory("test1", Long.toHexString(0x1001000), 0x2000);
-		return builder.getProgram();
+		runSwing(() -> tc.remove(list.get(list.size() - 1)));
 	}
 
 	@Test
@@ -232,7 +224,7 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 		rootFolder.createFile("notepad", p, TaskMonitor.DUMMY);
 		env.release(p);
 
-		GTreeRootNode rootNode = tree.getRootNode();
+		GTreeNode rootNode = tree.getViewRoot();
 		waitForTree(tree);
 		waitForSwing();
 
@@ -246,7 +238,7 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 		clickMouse(jTree, MouseEvent.BUTTON1, bounds.x + 5, bounds.y + 5, 2, 0);
 		waitForSwing();
 
-		Tool tool = waitForTool("CodeBrowser", project);
+		PluginTool tool = waitForTool("CodeBrowser", project);
 
 		// close the CodeBrowser tool
 		close(tool);
@@ -394,58 +386,6 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 		waitForSwing();
 	}
 
-	private void close(final Tool tool) {
-		runSwing(() -> tool.close());
-	}
-
-	private void removePreferences() {
-		Preferences.clear();
-	}
-
-	private Tool waitForTool(String toolName, Project project) {
-		Tool tool = null;
-		int sleepTime = 100;
-		int waitCount = 0;
-		while (tool == null && waitCount < 300) {
-			waitForSwing();
-			sleep(sleepTime);
-			ToolManager toolManager = project.getToolManager();
-			Tool[] runningTools = toolManager.getRunningTools();
-			if (runningTools != null && runningTools.length > 0) {
-				tool = runningTools[0];
-			}
-		}
-
-		assertNotNull("Did not find a single running " + toolName + " tool", tool);
-		assertEquals("Running tool is not " + toolName, toolName, tool.getName());
-
-		return tool;
-	}
-
-	private void initializeToolChestToJustCodeBrowser() {
-		final ToolServices toolServices = frontEndTool.getToolServices();
-		final ToolChest toolChest = toolServices.getToolChest();
-
-		final AtomicReference<String> failedTool = new AtomicReference<>();
-		runSwing(() -> {
-			ToolTemplate[] toolTemplates = toolChest.getToolTemplates();
-			for (ToolTemplate toolTemplate : toolTemplates) {
-				String name = toolTemplate.getName();
-				if (!name.equals("CodeBrowser")) {
-					if (!toolChest.remove(name)) {
-						failedTool.set(name);
-						return;
-					}
-				}
-			}
-
-		});
-
-		String toolName = failedTool.get();
-		assertNull("Failed to remove tool: " + toolName, toolName);
-		assertEquals("Did not remove tools as expected", 1, toolChest.getToolCount());
-	}
-
 	@Test
 	public void testImportDefaultTools() throws Exception {
 		final ToolChest tc = frontEndTool.getToolServices().getToolChest();
@@ -492,7 +432,7 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 			newList.add(config.getName());
 		}
 		newList.removeAll(origList);
-		SwingUtilities.invokeAndWait(() -> {
+		runSwing(() -> {
 			for (int i = 0; i < newList.size(); i++) {
 				tc.remove(newList.get(i));
 			}
@@ -543,22 +483,13 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 
 		DockingActionIf exportAction = getAction("Untitled", "Export Tool");
 		performAction(exportAction, "Untitled", false);
+		GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
 
-		waitForSwing();
-		JDialog d = waitForJDialog("Export Untitled");
-		assertNotNull(d);
-		final GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
-
-		assertNotNull(chooser);
-		final File file = new File(GenericRunInfo.getProjectsDirPath(), "untitled.tool");
-
-		SwingUtilities.invokeAndWait(() -> chooser.setSelectedFile(file));
-		waitForUpdateOnChooser(chooser);
+		setSelectedFile(chooser, exportFile);
 
 		pressButtonByText(chooser, "Export");
 		waitForSwing();
-		assertTrue(file.exists());
-		file.delete();
+		assertTrue(exportFile.exists());
 	}
 
 	@Test
@@ -568,39 +499,25 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 
 		DockingActionIf exportAction = getAction("Untitled", "Export Tool");
 		performAction(exportAction, "Untitled", false);
+		GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
 
-		waitForSwing();
-		JDialog d = waitForJDialog("Export Untitled");
-		assertNotNull(d);
-		final GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
-		assertNotNull(chooser);
-		final File file = new File(GenericRunInfo.getProjectsDirPath(), "untitled.tool");
-
-		SwingUtilities.invokeAndWait(() -> chooser.setSelectedFile(file));
-		waitForUpdateOnChooser(chooser);
+		setSelectedFile(chooser, exportFile);
 		pressButtonByText(chooser, "Export");
 		waitForSwing();
 
 		performAction(exportAction, "Untitled", false);
+		chooser = waitForDialogComponent(GhidraFileChooser.class);
 
-		waitForSwing();
-		d = waitForJDialog("Export Untitled");
-		assertNotNull(d);
-
-		SwingUtilities.invokeAndWait(() -> chooser.setSelectedFile(file));
-		waitForUpdateOnChooser(chooser);
-		final JButton b = findButtonByText(chooser, "Export");
-		SwingUtilities.invokeLater(() -> b.getActionListeners()[0].actionPerformed(null));
-		waitForSwing();
+		setSelectedFile(chooser, exportFile);
+		JButton b = findButtonByText(chooser, "Export");
+		pressButton(b, false);
 		OptionDialog optD = waitForDialogComponent(OptionDialog.class);
 		assertNotNull(optD);
 		assertEquals("Overwrite?", optD.getTitle());
 
-		pressButtonByText(optD.getComponent(), "Yes");
+		pressButtonByText(optD.getComponent(), "Overwrite");
 		waitForSwing();
-		assertTrue(file.exists());
-
-		file.delete();
+		assertTrue(exportFile.exists());
 	}
 
 	@Test
@@ -610,42 +527,28 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 
 		DockingActionIf exportAction = getAction("Untitled", "Export Tool");
 		performAction(exportAction, "Untitled", false);
+		GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
 
-		waitForSwing();
-		JDialog d = waitForJDialog("Export Untitled");
-		assertNotNull(d);
-		final GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
-		assertNotNull(chooser);
-		final File file = new File(GenericRunInfo.getProjectsDirPath(), "untitled.tool");
-
-		SwingUtilities.invokeAndWait(() -> chooser.setSelectedFile(file));
-		waitForUpdateOnChooser(chooser);
+		setSelectedFile(chooser, exportFile);
 		pressButtonByText(chooser, "Export");
 		waitForSwing();
 
 		performAction(exportAction, "Untitled", false);
 
-		waitForSwing();
-		d = waitForJDialog("Export Untitled");
-		assertNotNull(d);
+		chooser = waitForDialogComponent(GhidraFileChooser.class);
+		setSelectedFile(chooser, exportFile);
 
-		SwingUtilities.invokeAndWait(() -> chooser.setSelectedFile(file));
-		waitForUpdateOnChooser(chooser);
-		final JButton b = findButtonByText(chooser, "Export");
-		SwingUtilities.invokeLater(() -> b.getActionListeners()[0].actionPerformed(null));
+		JButton b = findButtonByText(chooser, "Export");
+		pressButton(b, false);
 		waitForSwing();
+
 		OptionDialog optD = waitForDialogComponent(OptionDialog.class);
 		assertNotNull(optD);
 		assertEquals("Overwrite?", optD.getTitle());
 
-		pressButtonByText(optD.getComponent(), "No");
-		waitForSwing();
-		d = waitForJDialog("Export Untitled");
-		final GhidraFileChooser ch = waitForDialogComponent(GhidraFileChooser.class);
-		assertNotNull(ch);
-		pressButtonByText(ch, "Cancel");
-		assertTrue(!d.isVisible());
-		file.delete();
+		pressButtonByText(optD.getComponent(), "Cancel");
+		chooser = waitForDialogComponent(GhidraFileChooser.class);
+		pressButtonByText(chooser, "Cancel");
 	}
 
 	@Test
@@ -655,37 +558,24 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 
 		DockingActionIf exportAction = getAction("Untitled", "Export Tool");
 		performAction(exportAction, "Untitled", false);
+		GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
 
-		waitForSwing();
-		JDialog d = waitForJDialog("Export Untitled");
-		assertNotNull(d);
-		final GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
-		assertNotNull(chooser);
-		final File file = new File(GenericRunInfo.getProjectsDirPath(), "untitled.tool");
-
-		SwingUtilities.invokeAndWait(() -> chooser.setSelectedFile(file));
-		waitForUpdateOnChooser(chooser);
+		setSelectedFile(chooser, exportFile);
 		pressButtonByText(chooser, "Export");
 		waitForSwing();
 
 		performAction(exportAction, "Untitled", false);
 
-		waitForSwing();
-		d = waitForJDialog("Export Untitled");
-		assertNotNull(d);
+		chooser = waitForDialogComponent(GhidraFileChooser.class);
+		setSelectedFile(chooser, exportFile);
 
-		SwingUtilities.invokeAndWait(() -> chooser.setSelectedFile(file));
-		waitForUpdateOnChooser(chooser);
-		final JButton b = findButtonByText(chooser, "Export");
-		SwingUtilities.invokeLater(() -> b.getActionListeners()[0].actionPerformed(null));
-		waitForSwing();
+		JButton b = findButtonByText(chooser, "Export");
+		pressButton(b, false);
 		OptionDialog optD = waitForDialogComponent(OptionDialog.class);
 		assertNotNull(optD);
 		assertEquals("Overwrite?", optD.getTitle());
 
 		pressButtonByText(optD.getComponent(), "Cancel");
-
-		file.delete();
 	}
 
 	@Test
@@ -694,19 +584,12 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 
 		DockingActionIf exportAction = getAction("Export Tool");
 		performToolButtonAction(exportAction, "Untitled", false, false);
-		waitForSwing();
-		JDialog d = waitForJDialog("Export Untitled");
-		assertNotNull(d);
-		final GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
-		assertNotNull(chooser);
-		final File file = new File(GenericRunInfo.getProjectsDirPath(), "untitled.tool");
+		GhidraFileChooser chooser = waitForDialogComponent(GhidraFileChooser.class);
+		setSelectedFile(chooser, exportFile);
 
-		SwingUtilities.invokeAndWait(() -> chooser.setSelectedFile(file));
-		waitForUpdateOnChooser(chooser);
 		pressButtonByText(chooser, "Export");
 		waitForSwing();
-		assertTrue(file.exists());
-		file.delete();
+		assertTrue(exportFile.exists());
 	}
 
 	@Test
@@ -718,6 +601,69 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 		performToolButtonAction(closeAction, "Untitled", false, true);
 
 		assertEquals(0, frontEndTool.getToolServices().getRunningTools().length);
+	}
+
+	private Program buildProgram(String programName) throws Exception {
+		ProgramBuilder builder = new ProgramBuilder(programName, ProgramBuilder._TOY);
+		builder.createMemory("test1", Long.toHexString(0x1001000), 0x2000);
+		return builder.getProgram();
+	}
+
+	private void close(final PluginTool tool) {
+		runSwing(() -> tool.close());
+	}
+
+	private void removePreferences() {
+		Preferences.clear();
+	}
+
+	private PluginTool waitForTool(String toolName, Project project) {
+		PluginTool tool = null;
+		int sleepTime = 100;
+		int waitCount = 0;
+		while (tool == null && waitCount < 300) {
+			waitForSwing();
+			sleep(sleepTime);
+			ToolManager toolManager = project.getToolManager();
+			PluginTool[] runningTools = toolManager.getRunningTools();
+			if (runningTools != null && runningTools.length > 0) {
+				tool = runningTools[0];
+			}
+		}
+
+		assertNotNull("Did not find a single running " + toolName + " tool", tool);
+		assertEquals("Running tool is not " + toolName, toolName, tool.getName());
+
+		return tool;
+	}
+
+	private void initializeToolChestToJustCodeBrowser() {
+		final ToolServices toolServices = frontEndTool.getToolServices();
+		final ToolChest toolChest = toolServices.getToolChest();
+
+		final AtomicReference<String> failedTool = new AtomicReference<>();
+		runSwing(() -> {
+			ToolTemplate[] toolTemplates = toolChest.getToolTemplates();
+			for (ToolTemplate toolTemplate : toolTemplates) {
+				String name = toolTemplate.getName();
+				if (!name.equals("CodeBrowser")) {
+					if (!toolChest.remove(name)) {
+						failedTool.set(name);
+						return;
+					}
+				}
+			}
+
+		});
+
+		String toolName = failedTool.get();
+		assertNull("Failed to remove tool: " + toolName, toolName);
+		assertEquals("Did not remove tools as expected", 1, toolChest.getToolCount());
+	}
+
+	private void setSelectedFile(GhidraFileChooser chooser, File f) throws Exception {
+		runSwing(() -> chooser.setSelectedFile(f));
+		waitForUpdateOnChooser(chooser);
 	}
 
 	private DockingActionIf getAction(String toolName, String action) {
@@ -743,8 +689,8 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 	private PluginTool createTool() throws Exception {
 		DockingActionIf createAction = getAction("Create Tool");
 		performAction(createAction, true);
-		Tool[] tools = frontEndTool.getProject().getToolManager().getRunningTools();
-		final PluginTool tool = (PluginTool) tools[0];
+		PluginTool[] tools = frontEndTool.getProject().getToolManager().getRunningTools();
+		final PluginTool tool = tools[0];
 		runSwing(() -> {
 			try {
 				tool.addPlugin(CodeBrowserPlugin.class.getName());
@@ -769,10 +715,10 @@ public class ToolActionManagerTest extends AbstractGhidraHeadedIntegrationTest {
 		final ToolButton tb = findToolButton(frontEndTool.getToolFrame(), name, runningTool);
 		Runnable r = () -> action.actionPerformed(new ActionContext(null, tb, tb));
 		if (doWait) {
-			SwingUtilities.invokeAndWait(r);
+			runSwing(r);
 		}
 		else {
-			SwingUtilities.invokeLater(r);
+			runSwing(r, false);
 		}
 		waitForSwing();
 	}

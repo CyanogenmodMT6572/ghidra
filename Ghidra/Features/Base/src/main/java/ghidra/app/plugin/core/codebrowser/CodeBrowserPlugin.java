@@ -32,12 +32,14 @@ import org.jdom.Element;
 import docking.ActionContext;
 import docking.action.DockingAction;
 import docking.action.MenuData;
+import docking.action.builder.ActionBuilder;
 import docking.tool.ToolConstants;
 import docking.widgets.fieldpanel.*;
 import docking.widgets.fieldpanel.field.Field;
 import docking.widgets.fieldpanel.support.*;
 import ghidra.GhidraOptions;
 import ghidra.app.CorePluginPackage;
+import ghidra.app.context.ListingActionContext;
 import ghidra.app.events.*;
 import ghidra.app.nav.Navigatable;
 import ghidra.app.plugin.PluginCategoryNames;
@@ -60,6 +62,7 @@ import ghidra.framework.plugintool.*;
 import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.program.model.address.*;
 import ghidra.program.model.listing.*;
+import ghidra.program.model.symbol.Reference;
 import ghidra.program.util.ProgramLocation;
 import ghidra.program.util.ProgramSelection;
 import ghidra.util.*;
@@ -121,6 +124,8 @@ public class CodeBrowserPlugin extends Plugin
 	private FocusingMouseListener focusingMouseListener = new FocusingMouseListener();
 
 	private DockingAction tableFromSelectionAction;
+	private DockingAction showXrefsAction;
+
 	private Color cursorHighlightColor;
 	private boolean isHighlightCursorLine;
 	private ProgramDropProvider dndProvider;
@@ -135,7 +140,7 @@ public class CodeBrowserPlugin extends Plugin
 			GhidraOptions.CATEGORY_BROWSER_POPUPS);
 		ToolOptions displayOptions = tool.getOptions(GhidraOptions.CATEGORY_BROWSER_DISPLAY);
 		ToolOptions fieldOptions = tool.getOptions(GhidraOptions.CATEGORY_BROWSER_FIELDS);
-		displayOptions.registerOptionsEditor(new ListingDisplayOptionsEditor(this, displayOptions));
+		displayOptions.registerOptionsEditor(new ListingDisplayOptionsEditor(displayOptions));
 		displayOptions.setOptionsHelpLocation(
 			new HelpLocation(getName(), GhidraOptions.CATEGORY_BROWSER_DISPLAY));
 		fieldOptions.setOptionsHelpLocation(
@@ -440,6 +445,7 @@ public class CodeBrowserPlugin extends Plugin
 	public void serviceAdded(Class<?> interfaceClass, Object service) {
 		if (interfaceClass == TableService.class) {
 			tool.addAction(tableFromSelectionAction);
+			tool.addAction(showXrefsAction);
 		}
 		if (interfaceClass == ViewManagerService.class && viewManager == null) {
 			viewManager = (ViewManagerService) service;
@@ -471,6 +477,7 @@ public class CodeBrowserPlugin extends Plugin
 		if (interfaceClass == TableService.class) {
 			if (tool != null) {
 				tool.removeAction(tableFromSelectionAction);
+				tool.removeAction(showXrefsAction);
 			}
 		}
 		if ((service == viewManager) && (currentProgram != null)) {
@@ -902,6 +909,9 @@ public class CodeBrowserPlugin extends Plugin
 	}
 
 	public void initActions() {
+
+		// note: these actions gets added later when the TableService is added
+
 		tableFromSelectionAction = new DockingAction("Create Table From Selection", getName()) {
 			ImageIcon markerIcon = ResourceManager.loadImage("images/searchm_obj.gif");
 
@@ -932,13 +942,35 @@ public class CodeBrowserPlugin extends Plugin
 			}
 		};
 
-		// note: this action gets added later when the TableService is added
 		tableFromSelectionAction.setEnabled(false);
 		tableFromSelectionAction.setMenuBarData(new MenuData(
 			new String[] { ToolConstants.MENU_SELECTION, "Create Table From Selection" }, null,
 			"SelectUtils"));
-		tableFromSelectionAction.setHelpLocation(
-			new HelpLocation("CodeBrowserPlugin", "Selection_Table"));
+		tableFromSelectionAction
+				.setHelpLocation(new HelpLocation("CodeBrowserPlugin", "Selection_Table"));
+
+		showXrefsAction = new ActionBuilder("Show Xrefs", getName())
+				.description("Show the Xrefs to the code unit containing the cursor")
+				.validContextWhen(context -> context instanceof ListingActionContext)
+				.onAction(context -> showXrefs(context))
+				.build();
+	}
+
+	private void showXrefs(ActionContext context) {
+
+		TableService service = tool.getService(TableService.class);
+		if (service == null) {
+			return;
+		}
+
+		ListingActionContext lac = (ListingActionContext) context;
+		ProgramLocation location = lac.getLocation();
+		if (location == null) {
+			return; // not sure if this can happen
+		}
+
+		Set<Reference> refs = XReferenceUtil.getAllXrefs(location);
+		XReferenceUtil.showAllXrefs(connectedProvider, tool, service, location, refs);
 	}
 
 	private GhidraProgramTableModel<Address> createTableModel(CodeUnitIterator iterator,
@@ -1013,8 +1045,8 @@ public class CodeBrowserPlugin extends Plugin
 	public boolean goToField(Address a, String fieldName, int occurrence, int row, int col,
 			boolean scroll) {
 
-		boolean result = SystemUtilities.runSwingNow(
-			() -> doGoToField(a, fieldName, occurrence, row, col, scroll));
+		boolean result = SystemUtilities
+				.runSwingNow(() -> doGoToField(a, fieldName, occurrence, row, col, scroll));
 		return result;
 	}
 
@@ -1133,6 +1165,16 @@ public class CodeBrowserPlugin extends Plugin
 			return (ListingField) f;
 		}
 		return null;
+	}
+
+	@Override
+	public void addListingDisplayListener(ListingDisplayListener listener) {
+		connectedProvider.addListingDisplayListener(listener);
+	}
+
+	@Override
+	public void removeListingDisplayListener(ListingDisplayListener listener) {
+		connectedProvider.removeListingDisplayListener(listener);
 	}
 
 	public String getCurrentFieldText() {

@@ -147,12 +147,17 @@ public class GhidraScriptUtil {
 
 	/**
 	 * Determine if the specified file is contained within the Ghidra installation.
-	 * @param file - file or directory to check
+	 * @param file file or directory to check
 	 * @return true if file is contained within Ghidra application root.
 	 */
-	public static boolean isSystemFile(ResourceFile file) {
+	private static boolean isSystemFile(ResourceFile file) {
 		try {
 			String filePath = file.getCanonicalPath().replace('\\', '/');
+			if (filePath.startsWith(USER_SCRIPTS_DIR)) {
+				// a script inside of the user scripts dir is not a 'system' script 
+				return false;
+			}
+
 			Collection<ResourceFile> roots = Application.getApplicationRootDirectories();
 			for (ResourceFile resourceFile : roots) {
 				String installPath = resourceFile.getCanonicalPath().replace('\\', '/');
@@ -330,8 +335,10 @@ public class GhidraScriptUtil {
 			//
 			ResourceFile preferredFile = null;
 			for (ResourceFile file : matchingClassFiles) {
-				if (file.getParentFile().getAbsolutePath().equals(
-					GhidraScriptUtil.USER_SCRIPTS_BIN_DIR)) {
+				if (file.getParentFile()
+						.getAbsolutePath()
+						.equals(
+							GhidraScriptUtil.USER_SCRIPTS_BIN_DIR)) {
 					preferredFile = file;
 					break;
 				}
@@ -378,11 +385,11 @@ public class GhidraScriptUtil {
 			//    /some/path/Ghidra/Features/Module/ghidra_scripts
 			// 
 			// Desired path:
-			//    /some/path/Ghidra/Features/Module/bin
+			//    /some/path/Ghidra/Features/Module/bin/scripts
 
 			ResourceFile scriptDir = path.getPath();
 			ResourceFile moduleDir = scriptDir.getParentFile();
-			dirs.add(new ResourceFile(moduleDir, BIN_DIR_NAME));
+			dirs.add(new ResourceFile(moduleDir, BIN_DIR_NAME + File.separator + "scripts"));
 		}
 		return dirs;
 	}

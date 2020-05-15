@@ -113,16 +113,19 @@ int4 ParamEntry::justifiedContain(const Address &addr,int4 sz) const
     return entry.justifiedContain(size,addr,sz,((flags&force_left_justify)!=0));
   }
   if (spaceid != addr.getSpace()) return -1;
-  if (addr.getOffset() < addressbase) return -1;
-  uintb endaddr = addr.getOffset() + sz - 1;
-  if (endaddr < addr.getOffset()) return -1; // Don't allow wrap around
+  uintb startaddr = addr.getOffset();
+  if (startaddr < addressbase) return -1;
+  uintb endaddr = startaddr + sz - 1;
+  if (endaddr < startaddr) return -1; // Don't allow wrap around
   if (endaddr > (addressbase+size-1)) return -1;
+  startaddr -= addressbase;
+  endaddr -= addressbase;
   if (!isLeftJustified()) {   // For right justified (big endian), endaddr must be aligned
     int4 res = (int4)((endaddr+1) % alignment);
     if (res==0) return 0;
     return (alignment-res);
   }
-  return (int4)(addr.getOffset() % alignment);
+  return (int4)(startaddr % alignment);
 }
 
 /// \brief Calculate the containing memory range
@@ -160,7 +163,7 @@ bool ParamEntry::getContainer(const Address &addr,int4 sz,VarnodeData &res) cons
     res.size = size;
     return true;
   }
-  uintb al = addr.getOffset() % alignment;
+  uintb al = (addr.getOffset() - addressbase) % alignment;
   res.space = spaceid;
   res.offset = addr.getOffset() - al;
   res.size = (int4)(endaddr.getOffset()-res.offset) + 1;
@@ -203,7 +206,8 @@ OpCode ParamEntry::assumedExtension(const Address &addr,int4 sz,VarnodeData &res
   }
   else {	// Otherwise take up whole alignment
     res.space = spaceid;
-    res.offset = addr.getOffset() - addr.getOffset() % alignment;
+    int4 alignAdjust = (addr.getOffset() - addressbase) % alignment;
+    res.offset = addr.getOffset() - alignAdjust;
     res.size = alignment;
   }
   if ((flags & smallsize_zext)!=0)
@@ -229,7 +233,7 @@ int4 ParamEntry::getSlot(const Address &addr,int4 skip) const
 {
   int4 res = group;
   if (alignment != 0) {
-    uintb diff = addr.getOffset() + skip - addressbase;	// Assume addressbase % alignment == 0
+    uintb diff = addr.getOffset() + skip - addressbase;
     int4 baseslot = (int4)diff / alignment;
     if (isReverseStack())
       res += (numslots -1) - baseslot;
@@ -365,8 +369,8 @@ void ParamEntry::restoreXml(const Element *el,const AddrSpaceManager *manage,boo
   spaceid = addr.getSpace();
   addressbase = addr.getOffset();
   if (alignment != 0) {
-    if ((addressbase % alignment) != 0)
-      throw LowlevelError("Stack <pentry> address must match alignment");
+//    if ((addressbase % alignment) != 0)
+//      throw LowlevelError("Stack <pentry> address must match alignment");
     numslots = size / alignment;
   }
   if (spaceid->isReverseJustified()) {
@@ -478,7 +482,7 @@ int4 ParamListStandard::characterizeAsParam(const Address &loc,int4 size) const
     const ParamEntry *testEntry = (*iterpair.first).getParamEntry();
     if (testEntry->getMinSize() <= size && testEntry->justifiedContain(loc, size)==0)
       return 1;
-    if (testEntry->containedBy(loc, size))
+    if (testEntry->isExclusion() && testEntry->containedBy(loc, size))
       res = 2;
     ++iterpair.first;
   }
@@ -486,7 +490,7 @@ int4 ParamListStandard::characterizeAsParam(const Address &loc,int4 size) const
     iterpair.second = resolver->find_end(loc.getOffset() + (size-1));
     while(iterpair.first != iterpair.second) {
       const ParamEntry *testEntry = (*iterpair.first).getParamEntry();
-      if (testEntry->containedBy(loc, size)) {
+      if (testEntry->isExclusion() && testEntry->containedBy(loc, size)) {
 	res = 2;
 	break;
       }
@@ -546,7 +550,7 @@ void ParamListStandard::assignMap(const vector<Datatype *> &proto,bool isinput,T
 	// Assume datatype is stored elsewhere and only the pointer is passed
 	AddrSpace *spc = spacebase;
 	if (spc == (AddrSpace *)0)
-	  spc = typefactory.getArch()->getDefaultSpace();
+	  spc = typefactory.getArch()->getDefaultDataSpace();
 	int4 pointersize = spc->getAddrSize();
 	int4 wordsize = spc->getWordSize();
 	Datatype *pointertp = typefactory.getTypePointerAbsolute(pointersize,proto[i],wordsize);
@@ -890,8 +894,8 @@ bool ParamListStandard::checkJoin(const Address &hiaddr,int4 hisize,const Addres
   if (entryHi->getGroup() == entryLo->getGroup()) {
     if (entryHi->isExclusion()||entryLo->isExclusion()) return false;
     if (!hiaddr.isContiguous(hisize,loaddr,losize)) return false;
-    if ((hiaddr.getOffset() % entryHi->getAlign()) != 0) return false;
-    if ((loaddr.getOffset() % entryLo->getAlign()) != 0) return false;
+    if (((hiaddr.getOffset() - entryHi->getBase()) % entryHi->getAlign()) != 0) return false;
+    if (((loaddr.getOffset() - entryLo->getBase()) % entryLo->getAlign()) != 0) return false;
     return true;
   }
   else {
@@ -949,9 +953,12 @@ bool ParamListStandard::getBiggestContainedParam(const Address &loc,int4 size,Va
   ParamEntryResolver *resolver = resolverMap[index];
   if (resolver == (ParamEntryResolver *)0)
     return false;
+  Address endLoc = loc + (size-1);
+  if (endLoc.getOffset() < loc.getOffset())
+    return false;	// Assume there is no parameter if we see wrapping
   const ParamEntry *maxEntry = (const ParamEntry *)0;
   ParamEntryResolver::const_iterator iter = resolver->find_begin(loc.getOffset());
-  ParamEntryResolver::const_iterator enditer = resolver->find_end(loc.getOffset() + (size-1));
+  ParamEntryResolver::const_iterator enditer = resolver->find_end(endLoc.getOffset());
   while(iter != enditer) {
     const ParamEntry *testEntry = (*iter).getParamEntry();
     ++iter;
@@ -962,9 +969,9 @@ bool ParamListStandard::getBiggestContainedParam(const Address &loc,int4 size,Va
 	maxEntry = testEntry;
     }
   }
-  if (!maxEntry->isExclusion())
-    return false;
   if (maxEntry != (const ParamEntry *)0) {
+    if (!maxEntry->isExclusion())
+      return false;
     res.space = maxEntry->getSpace();
     res.offset = maxEntry->getBase();
     res.size = maxEntry->getSize();
@@ -1092,7 +1099,7 @@ void ParamListStandardOut::assignMap(const vector<Datatype *> &proto,bool isinpu
   if (res.back().addr.isInvalid()) { // Could not assign an address (too big)
     AddrSpace *spc = spacebase;
     if (spc == (AddrSpace *)0)
-      spc = typefactory.getArch()->getDefaultSpace();
+      spc = typefactory.getArch()->getDefaultDataSpace();
     int4 pointersize = spc->getAddrSize();
     int4 wordsize = spc->getWordSize();
     Datatype *pointertp = typefactory.getTypePointerAbsolute(pointersize, proto[0], wordsize);
@@ -2474,14 +2481,7 @@ ProtoParameter *ProtoStoreSymbol::setInput(int4 i, const string &nm,const Parame
   if (res->sym == (Symbol *)0) {
     if (scope->discoverScope(pieces.addr,pieces.type->getSize(),usepoint) != scope)
       usepoint = restricted_usepoint; 
-    string name;
-    if (nm.size()==0) {
-      int4 index = i+1;
-      name = scope->buildVariableName(pieces.addr,usepoint,pieces.type,index,Varnode::input);
-    }
-    else
-      name = nm;
-    res->sym = scope->addSymbol(name,pieces.type,pieces.addr,usepoint)->getSymbol();
+    res->sym = scope->addSymbol(nm,pieces.type,pieces.addr,usepoint)->getSymbol();
     scope->setCategory(res->sym,0,i);
     if ((pieces.flags & (Varnode::indirectstorage|Varnode::hiddenretparm)) != 0)
       scope->setAttribute(res->sym,pieces.flags & (Varnode::indirectstorage|Varnode::hiddenretparm));
@@ -2927,6 +2927,7 @@ FuncProto::FuncProto(void)
   store = (ProtoStore *)0;
   flags = 0;
   injectid = -1;
+  returnBytesConsumed = 0;
 }
 
 /// \param op2 is the other function prototype to copy into \b this
@@ -3098,6 +3099,19 @@ void FuncProto::setOutputLock(bool val)
   store->getOutput()->setTypeLock(val);
 }
 
+/// This value can be used as a hint as to how much of the return value is important and
+/// is used to inform the dead code \e consume algorithm.
+/// \param val is the estimated number of bytes or 0
+/// \return \b true if the value was changed
+bool FuncProto::setReturnBytesConsumed(int4 val)
+
+{
+  int4 oldVal = returnBytesConsumed;
+  if (oldVal == 0 || val < oldVal)
+    returnBytesConsumed = val;
+  return (oldVal != val);
+}
+
 /// \brief Assuming \b this prototype is locked, calculate the \e extrapop
 ///
 /// If \e extrapop is unknown and \b this prototype is locked, try to directly
@@ -3145,6 +3159,7 @@ void FuncProto::clearUnlockedOutput(void)
   }
   else
     store->clearOutput();
+  returnBytesConsumed = 0;
 }
 
 void FuncProto::clearInput(void)
@@ -4102,6 +4117,7 @@ int4 FuncCallSpecs::transferLockedInputParam(ProtoParameter *param)
     if (startaddr < curtrial.getAddress()) continue;
     Address trialend = curtrial.getAddress() + (curtrial.getSize() - 1);
     if (trialend < lastaddr) continue;
+    if (curtrial.isDefinitelyNotUsed()) return 0;	// Trial has already been stripped
     return curtrial.getSlot();
   }
   if (startaddr.getSpace()->getType() == IPTR_SPACEBASE)
@@ -4859,6 +4875,42 @@ void FuncCallSpecs::buildOutputFromTrials(Funcdata &data,vector<Varnode *> &tria
     if (in1 != (Varnode *)0)
       data.deleteVarnode(in1);
   }
+}
+
+/// \brief Get the estimated number of bytes within the given parameter that are consumed
+///
+/// As a function is decompiled, there may hints about how many of the bytes, within the
+/// storage location used to pass the parameter, are used by \b this sub-function. A non-zero
+/// value means that that many least significant bytes of the storage location are used. A value
+/// of zero means all bytes are presumed used.
+/// \param slot is the slot of the given input parameter
+/// \return the number of bytes used (or 0)
+int4 FuncCallSpecs::getInputBytesConsumed(int4 slot) const
+
+{
+  if (slot >= inputConsume.size())
+    return 0;
+  return inputConsume[slot];
+}
+
+/// \brief Set the estimated number of bytes within the given parameter that are consumed
+///
+/// This provides a hint to the dead code \e consume algorithm, while examining the calling
+/// function, about how the given parameter within the subfunction is used.
+/// A non-zero value means that that many least significant bytes of the storage location
+/// are used. A value of zero means all bytes are presumed used.
+/// \param slot is the slot of the given input parameter
+/// \param val is the number of bytes consumed (or 0)
+/// \return \b true if there was a change in the estimate
+bool FuncCallSpecs::setInputBytesConsumed(int4 slot,int4 val) const
+
+{
+  while(inputConsume.size() <= slot)
+    inputConsume.push_back(0);
+  int4 oldVal = inputConsume[slot];
+  if (oldVal == 0 || val < oldVal)
+    inputConsume[slot] = val;
+  return (oldVal != val);
 }
 
 /// \brief Prepend any extra parameters if a paramshift is required

@@ -25,6 +25,7 @@ import java.util.List;
 import javax.swing.*;
 import javax.swing.tree.TreePath;
 
+import org.apache.commons.lang3.StringUtils;
 import org.junit.*;
 
 import docking.test.AbstractDockingTest;
@@ -168,7 +169,7 @@ public class GTreeTest extends AbstractDockingTest {
 		node2 = findNodeInTree("Leaf Child - Single B1");
 		assertNull("Found a node in the tree that should have been filtered out", node2);
 
-		gTree.refilter();
+		gTree.refilterNow();
 		waitForTree();
 		node = findNodeInTree("Leaf Child - Many B1");
 		assertNotNull("Did not find existing child node in filtered tree", node);
@@ -177,13 +178,32 @@ public class GTreeTest extends AbstractDockingTest {
 		assertNull("Found a node in the tree that should have been filtered out", node2);
 
 		filterEnabled = false;
-		gTree.refilter();
+		gTree.refilterNow();
 		waitForTree();
 		node = findNodeInTree("Leaf Child - Many B1");
 		assertNull("Found node when filter should not have matched after a refilter", node);
 
 		node2 = findNodeInTree("Leaf Child - Single B1");
 		assertNull("Found a node in the tree that should have been filtered out", node2);
+	}
+
+	@Test
+	public void testExpandCollapseNode() {
+		GTreeNode node = findNodeInTree(NonLeafWithOneLevelOfChildrenNodeB.class.getSimpleName());
+		assertTrue(!node.isExpanded());
+
+		node.expand();
+		waitForTree();
+		assertTrue(node.isExpanded());
+
+		node.collapse();
+		waitForTree();
+		assertTrue(!node.isExpanded());
+
+		GTreeNode root = node.getRoot();
+		root.collapse();
+		assertTrue(!root.isExpanded());
+		assertTrue(gTree.getExpandedPaths().isEmpty());
 	}
 
 	@Test
@@ -262,6 +282,7 @@ public class GTreeTest extends AbstractDockingTest {
 		//
 		// Same test, but with a selection that existed before the filter's selection change
 		//
+		node = findNodeInTree("Leaf Child - Many B1");
 		gTree.clearSelectionPaths();
 		waitForTree();
 
@@ -385,9 +406,9 @@ public class GTreeTest extends AbstractDockingTest {
 
 	@Test
 	public void testExpandPath() {
-		List<TreePath> expandedPaths = gTree.getExpandedPaths(gTree.getRootNode());
+		List<TreePath> expandedPaths = gTree.getExpandedPaths(gTree.getViewRoot());
 		assertEquals("Unexpectedly have an expanded tree by default", 1, expandedPaths.size());
-		assertEquals(gTree.getRootNode(), expandedPaths.get(0).getLastPathComponent());
+		assertEquals(gTree.getViewRoot(), expandedPaths.get(0).getLastPathComponent());
 
 		GTreeNode node = findNodeInTree("Leaf Child - Many B1");
 		assertNotNull("Did not find existing child node in non filtered tree", node);
@@ -395,7 +416,7 @@ public class GTreeTest extends AbstractDockingTest {
 		gTree.expandPath(node);
 		waitForTree();
 
-		expandedPaths = gTree.getExpandedPaths(gTree.getRootNode());
+		expandedPaths = gTree.getExpandedPaths(gTree.getViewRoot());
 		assertTrue("Did not get expanded paths after calling expand paths",
 			expandedPaths.size() > 0);
 		assertExpaned(expandedPaths, node.getParent());
@@ -403,20 +424,20 @@ public class GTreeTest extends AbstractDockingTest {
 
 	@Test
 	public void testPreventRootCollapseExpandsRoot() {
-		gTree.collapseAll(gTree.getRootNode());
+		gTree.collapseAll(gTree.getViewRoot());
 		waitForTree();
 
 		gTree.setRootNodeAllowedToCollapse(false);
 		waitForTree();
 
-		List<TreePath> expanded = gTree.getExpandedPaths(gTree.getRootNode());
+		List<TreePath> expanded = gTree.getExpandedPaths(gTree.getViewRoot());
 
 		assertEquals("Should have only one expanded path", 1, expanded.size());
 		TreePath path0 = expanded.get(0);
 
-		assertEquals(path0.getLastPathComponent(), gTree.getRootNode());
+		assertEquals(path0.getLastPathComponent(), gTree.getViewRoot());
 		assertEquals("Expanded path does not end at tree root", path0.getLastPathComponent(),
-			gTree.getRootNode());
+			gTree.getViewRoot());
 	}
 
 	@Test
@@ -426,16 +447,16 @@ public class GTreeTest extends AbstractDockingTest {
 		gTree.expandAll();
 		waitForTree();
 
-		gTree.collapseAll(gTree.getRootNode());
+		gTree.collapseAll(gTree.getViewRoot());
 		waitForTree();
 
-		List<TreePath> expanded = gTree.getExpandedPaths(gTree.getRootNode());
+		List<TreePath> expanded = gTree.getExpandedPaths(gTree.getViewRoot());
 
 		assertEquals("Should have only one expanded path", 1, expanded.size());
 		TreePath path0 = expanded.get(0);
 
 		assertEquals("Expanded path does not end at tree root", path0.getLastPathComponent(),
-			gTree.getRootNode());
+			gTree.getViewRoot());
 	}
 
 	@Test
@@ -481,7 +502,7 @@ public class GTreeTest extends AbstractDockingTest {
 	}
 
 	@Test
-	public void testGetAndRestoreTreeState() {
+	public void testRestoreTreeState() {
 		//
 		// Test that we can setup the tree, record its state, change the tree and then restore
 		// the saved state
@@ -524,6 +545,87 @@ public class GTreeTest extends AbstractDockingTest {
 		selectionPath = gTree.getSelectionPath();
 		assertNotNull("Tree did not select node", selectionPath);
 		assertEquals(originalNode, selectionPath.getLastPathComponent());
+	}
+
+	@Test
+	public void testRestoreTreeState_ExpandedStateOnly() {
+		//
+		// Test that we can setup the tree, record its expanded state, change the tree 
+		// and then restore the saved state
+		//
+
+		GTreeNode originalNode = findNodeInTree("Leaf Child - Many B1").getParent();
+		assertNotNull("Did not find existing child node in non filtered tree", originalNode);
+
+		gTree.expandPath(originalNode);
+		waitForTree();
+
+		List<TreePath> expandedPaths = gTree.getExpandedPaths();
+		assertEquals(3, expandedPaths.size());
+
+		// make sure one of the expanded paths contains the originalNode
+		assertExpanded(originalNode);
+
+		GTreeState savedState = gTree.getTreeState();
+
+		// now collapse the tree and restore the state
+		gTree.collapseAll(gTree.getViewRoot());
+		waitForTree();
+
+		expandedPaths = gTree.getExpandedPaths();
+		assertTrue(expandedPaths.isEmpty());
+
+		gTree.restoreTreeState(savedState);
+		waitForTree();
+
+		expandedPaths = gTree.getExpandedPaths();
+		assertEquals(3, expandedPaths.size());
+		assertExpanded(originalNode);
+	}
+
+	private void assertExpanded(GTreeNode node) {
+
+		List<TreePath> expandedPaths = gTree.getExpandedPaths();
+		TreePath path = expandedPaths
+				.stream()
+				.filter(p -> p.getLastPathComponent().equals(node))
+				.findAny()
+				.orElse(null);
+		assertNotNull(path);
+	}
+
+	@Test
+	public void testRestoreTreeState_NoSelectedNodes_BeforeOrAfterFilter() {
+
+		//
+		// Tests the base use case for the tree's 'restore state', which is to put the tree
+		// back to the expanded state before a filter *if the user does NOT click the tree*.
+		//
+
+		installLargeTreeModel_WithManyExpandablePaths();
+
+		GTreeNode originalNode = findNodeInTree("Leaf Child - Single B0").getParent();
+		assertNotNull("Did not find existing child node in non filtered tree", originalNode);
+
+		gTree.expandPath(originalNode);
+		waitForTree();
+
+		TreePath expected = getLastVisiblePath();
+
+		// Set a filter that opens more paths than we had initially expanded.  This ensures
+		// that the tree's state changes after the filter is applied.
+		setFilterText("Leaf");
+
+		clearFilterText();
+
+		TreePath selectionPath = gTree.getSelectionPath();
+		assertNull("No node should be selected", selectionPath);
+
+		List<TreePath> expandedPaths = gTree.getExpandedPaths();
+		assertExpaned(expandedPaths, originalNode);
+
+		TreePath newFirstVisiblePath = getLastVisiblePath();
+		assertCloseEnough(expected, newFirstVisiblePath);
 	}
 
 	@Test
@@ -701,7 +803,8 @@ public class GTreeTest extends AbstractDockingTest {
 			}
 		}
 
-		fail("Node not expaded: " + expected + "; expanded paths: " + expandedPaths);
+		String pretty = StringUtils.join(expandedPaths, "\n\t");
+		fail("\n\tNode not expanded: " + expected + ";\n\texpanded paths:\n\t" + pretty);
 	}
 
 	/** Verifies the actual is within one of the expected */
@@ -771,27 +874,6 @@ public class GTreeTest extends AbstractDockingTest {
 		int start = jTree.getClosestRowForLocation(r.x, r.y + r.height);
 		TreePath path = gTree.getPathForRow(start);
 		return path;
-	}
-
-	@Override
-	protected void testFailed(Throwable e) {
-		StringBuilder buffy = new StringBuilder();
-		printTree(gTree.getRootNode(), 0, buffy);
-		System.err.println("GTree state: ");
-		System.err.println(buffy.toString());
-	}
-
-	private void printTree(GTreeNode node, int indentLevel, StringBuilder buffy) {
-		buffy.append('\n');
-		for (int i = 0; i < indentLevel; i++) {
-			buffy.append('\t');
-		}
-		buffy.append("node: " + node.getName());
-		int nextIndentLevel = indentLevel + 1;
-		List<GTreeNode> children = node.getChildren();
-		for (GTreeNode child : children) {
-			printTree(child, nextIndentLevel, buffy);
-		}
 	}
 
 	private void assertProgressPanel(boolean isShowing) {
@@ -865,7 +947,7 @@ public class GTreeTest extends AbstractDockingTest {
 	}
 
 	private GTreeNode findNodeInTree(String name) {
-		GTreeRootNode rootNode = gTree.getRootNode();
+		GTreeNode rootNode = gTree.getViewRoot();
 		return findNodeInTree(rootNode, name);
 	}
 
@@ -905,7 +987,7 @@ public class GTreeTest extends AbstractDockingTest {
 
 	private class TestGTree extends GTree {
 
-		public TestGTree(GTreeRootNode root) {
+		public TestGTree(GTreeNode root) {
 			super(root);
 		}
 
@@ -930,7 +1012,7 @@ public class GTreeTest extends AbstractDockingTest {
 		}
 	}
 
-	private class TestRootNode extends AbstractGTreeRootNode {
+	private class TestRootNode extends GTreeNode {
 
 		TestRootNode() {
 			List<GTreeNode> children = new ArrayList<>();
@@ -961,7 +1043,7 @@ public class GTreeTest extends AbstractDockingTest {
 		}
 	}
 
-	private class ManyLeafChildrenRootNode extends AbstractGTreeRootNode {
+	private class ManyLeafChildrenRootNode extends GTreeNode {
 
 		ManyLeafChildrenRootNode() {
 			List<GTreeNode> children = new ArrayList<>();
@@ -990,7 +1072,7 @@ public class GTreeTest extends AbstractDockingTest {
 		}
 	}
 
-	private class ManyNonLeafChildrenRootNode extends AbstractGTreeRootNode {
+	private class ManyNonLeafChildrenRootNode extends GTreeNode {
 
 		ManyNonLeafChildrenRootNode() {
 			List<GTreeNode> children = new ArrayList<>();
@@ -1022,7 +1104,7 @@ public class GTreeTest extends AbstractDockingTest {
 	/**
 	 * A basic node with some children.
 	 */
-	private class NonLeafWithOneLevelOfChildrenNodeA extends AbstractGTreeNode {
+	private class NonLeafWithOneLevelOfChildrenNodeA extends GTreeNode {
 
 		private String name = Integer.toString(++nodeIdCounter);
 
@@ -1056,7 +1138,7 @@ public class GTreeTest extends AbstractDockingTest {
 	/**
 	 * A basic node with some children.
 	 */
-	private class NonLeafWithOneLevelOfChildrenNodeB extends AbstractGTreeNode {
+	private class NonLeafWithOneLevelOfChildrenNodeB extends GTreeNode {
 		private String name = Integer.toString(++nodeIdCounter);
 
 		NonLeafWithOneLevelOfChildrenNodeB() {
@@ -1094,7 +1176,7 @@ public class GTreeTest extends AbstractDockingTest {
 	/**
 	 * A basic leaf node 
 	 */
-	private class LeafNode extends AbstractGTreeNode {
+	private class LeafNode extends GTreeNode {
 
 		private final String name;
 
@@ -1126,7 +1208,7 @@ public class GTreeTest extends AbstractDockingTest {
 	/**
 	 * A node with children that may have children
 	 */
-	private class NonLeafWithManyLevelOfChildrenNodeA extends AbstractGTreeNode {
+	private class NonLeafWithManyLevelOfChildrenNodeA extends GTreeNode {
 
 		private String name = Integer.toString(++nodeIdCounter);
 
@@ -1160,7 +1242,7 @@ public class GTreeTest extends AbstractDockingTest {
 	/**
 	 * A node with children that may have children
 	 */
-	private class NonLeafWithManyLevelOfChildrenNodeB extends AbstractGTreeNode {
+	private class NonLeafWithManyLevelOfChildrenNodeB extends GTreeNode {
 
 		private String name = Integer.toString(++nodeIdCounter);
 
@@ -1195,7 +1277,7 @@ public class GTreeTest extends AbstractDockingTest {
 	/**
 	 * A basic node with some children.
 	 */
-	private class NonLeafWithMoreChildrenThanFitInTheView extends AbstractGTreeNode {
+	private class NonLeafWithMoreChildrenThanFitInTheView extends GTreeNode {
 
 		private String name = Integer.toString(++nodeIdCounter);
 
